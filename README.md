@@ -259,8 +259,3 @@ Potential extensions include:
 
 These are possible future enhancements and are not claimed as existing features.
 
-## License and Attribution
-
-This README documents the functionality described in the project repository. Refer to the repository's license and attribution requirements before redistributing or modifying the source code.
-
-Original repository: https://github.com/Akashvallamkonda/inventory-management-api
