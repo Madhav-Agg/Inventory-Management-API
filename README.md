@@ -611,8 +611,7 @@ Verified results in this environment (JDK 21, Maven Wrapper 3.9.16):
 | `.\mvnw.cmd test` | **BUILD SUCCESS** — `Tests run: 5, Failures: 0, Errors: 0, Skipped: 0` |
 | `mvn package` | **BUILD SUCCESS** — produced `target/inventory-1.0.0.jar` (executable Spring Boot jar) |
 
-> Live end-to-end HTTP testing requires a running MySQL instance with valid credentials. See
-> [Limitations](#limitations-and-future-improvements).
+> Live end-to-end HTTP testing requires a running MySQL instance with valid credentials.
 
 **Swagger / OpenAPI:** not configured. There is no Springdoc/OpenAPI dependency, so no generated
 API documentation UI is available.
@@ -669,40 +668,9 @@ Business rules that raise these exceptions:
 | `spring.jpa.show-sql` | `true` | Logs SQL statements |
 | `spring.jpa.open-in-view` | `false` | Disables OSIV (good practice) |
 
-### Security
-
-- **No authentication or authorization is implemented.** Spring Security is not a dependency, and
-  there are no login, token, or role checks. All endpoints are publicly accessible.
-- **No secrets are committed.** The datasource password comes from the `DB_PASSWORD` environment
-  variable; there are no hard-coded credentials, API keys, or tokens in the repository.
-
-Because the API is unauthenticated, it should only be exposed in a trusted/local environment and
-is not production-hardened as-is.
 
 ---
 
-## Limitations and Future Improvements
-
-These are **not yet implemented** — they are honest suggestions, kept separate from the features
-that exist:
-
-- **No authentication/authorization** — any client can call every endpoint.
-- **No pagination or sorting** — list endpoints return the entire table.
-- **Entity used directly as request/response** — there is no DTO layer, so persistence fields
-  (e.g. `id`, `createdAt`) are exposed in the API contract and a client can send them (the service
-  ignores/normalises some of them).
-- **No OpenAPI/Swagger documentation.**
-- **No database migrations** — relies on `ddl-auto=update` instead of versioned migrations.
-- **Generic error handling for some client errors** — malformed JSON, a non-numeric `{id}`, or a
-  missing required `change` parameter fall through to the catch-all handler and return `500`
-  rather than `400`.
-- **No concurrency control on stock updates** — the read-modify-write in `adjustStock` is
-  transactional but has no optimistic locking, so concurrent updates could interleave.
-- **No integration/controller tests** — only service-layer unit tests exist.
-- **No CI pipeline** and no Docker setup.
-- **`show-sql=true`** is enabled, which is noisy for production.
-
----
 
 ## License
 
