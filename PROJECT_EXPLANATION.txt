@@ -1,0 +1,684 @@
+================================================================================
+INVENTORY MANAGEMENT API — BEGINNER-FRIENDLY PROJECT EXPLANATION
+(for interview preparation)
+
+Repository: https://github.com/Madhav-Agg/Inventory-Management-API
+Language/Framework: Java 17 + Spring Boot 3.3.5
+Build tool: Maven
+Database: MySQL (via Spring Data JPA / Hibernate)
+Test framework: JUnit 5 + Mockito
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1. WHAT THE PROJECT DOES AND WHY IT IS USEFUL
+--------------------------------------------------------------------------------
+
+This project is a backend web service (a "REST API") for managing the inventory of a
+shop or warehouse. It does NOT have a user interface — it is meant to be called by
+other programs: a website, a mobile app, or tools like Postman.
+
+It lets you:
+
+  * Add a product to the catalogue (name, SKU code, quantity, price, category).
+  * See every product.
+  * See one product by its id.
+  * Change a product's details.
+  * Add or remove stock (quantity) — and it refuses to go below zero stock.
+  * Find low-stock products (useful for "reorder soon" reports).
+  * Filter products by category, or search by name.
+  * Delete a product.
+
+Why it is useful: any real e-commerce, retail, or warehouse system needs a reliable
+place to store what products exist and how many are in stock. This API is a clean,
+small example of how that "inventory brain" can be built with standard, industry
+enterprise tools (Spring Boot + JPA + MySQL). It shows an interviewer that you can
+design HTTP endpoints, validate input, talk to a database safely, and return
+consistent errors.
+
+Important honesty note for the interview: it has NO login/security, NO pagination,
+and NO API documentation UI. Do not claim it has those. This document marks clearly
+what is and is not implemented.
+
+
+--------------------------------------------------------------------------------
+2. HOW A REQUEST TRAVELS FROM THE CLIENT TO THE SERVER AND BACK
+--------------------------------------------------------------------------------
+
+Big picture:
+
+  Client (Postman / browser / app)
+        |
+        |  HTTP request, e.g. POST http://localhost:8080/api/products
+        |  with a JSON body
+        v
+  ProductController        (web layer)      -> receives the request, validates it
+        |
+        v
+  ProductService           (business layer) -> applies the rules
+        |
+        v
+  ProductRepository        (data layer)     -> Spring Data JPA interface
+        |
+        v
+  Hibernate / JPA  --->  MySQL database (inventory_db.products)
+        |
+        |  returns entity objects back up the same chain
+        v
+  ProductController  -> Spring converts the Java objects to JSON with Jackson
+        |
+        v
+  HTTP response (e.g. 201 Created + JSON)
+
+Step-by-step for a "create product" call:
+
+  1. The HTTP request arrives at the embedded Tomcat server on port 8080.
+  2. Spring MVC looks at the URL "/api/products" and the HTTP verb "POST" and finds
+     the matching method: ProductController.create(...).
+  3. Spring converts the JSON body into a Product Java object (using Jackson). This is
+     called "deserialization".
+  4. Because the parameter is annotated @Valid, Spring runs the Bean Validation rules
+     on the Product. If any rule fails, Spring throws MethodArgumentNotValidException
+     and the request never reaches the service.
+  5. The controller calls productService.create(product).
+  6. The service checks whether the SKU already exists (repo.existsBySku), sets the id
+     to null, and calls repo.save(product).
+  7. Hibernate translates save() into an SQL INSERT into the products table, and the
+     database generates the new id.
+  8. The saved Product (now with an id and timestamps) comes back to the controller.
+  9. The controller wraps it in a ResponseEntity with status 201 Created.
+ 10. Spring serializes the Product object to JSON using Jackson and sends it back.
+
+
+--------------------------------------------------------------------------------
+3. THE ROLE OF EVERY MAJOR PACKAGE AND IMPORTANT CLASS
+--------------------------------------------------------------------------------
+
+All application code lives under: src/main/java/com/akash/inventory
+
+  * InventoryApplication
+      The starting point of the whole application. Annotated @SpringBootApplication.
+      Its main() method calls SpringApplication.run(...), which starts the embedded
+      web server and creates all the Spring beans.
+
+  * controller (package)
+      The web/HTTP layer.
+      - ProductController.java: annotated @RestController and @RequestMapping
+        ("/api/products"). It maps URLs and HTTP methods to Java methods. It only
+        coordinates: validate -> call service -> choose status code. It has no
+        business logic.
+        It uses @RequiredArgsConstructor (Lombok) to inject the service through the
+        constructor — a good practice called "constructor injection".
+
+  * service (package)
+      The business rules layer.
+      - ProductService.java: annotated @Service and @Transactional. This is where the
+        real decisions happen: reject duplicate SKUs, prevent negative stock, update
+        fields, set/refresh timestamps, and define transaction boundaries. Read-only
+        methods are marked @Transactional(readOnly = true) as an optimization.
+
+  * repository (package)
+      The database access layer.
+      - ProductRepository.java: an interface extending JpaRepository<Product, Long>.
+        You write NO implementation. Spring Data JPA generates it at startup by
+        reading the method names:
+            findByCategoryIgnoreCase(String)  -> WHERE LOWER(category) = LOWER(?)
+            findByQuantityLessThan(int)       -> WHERE quantity < ?
+            findByNameContainingIgnoreCase(String) -> WHERE LOWER(name) LIKE %?%
+            existsBySku(String)               -> SELECT COUNT(*) ... WHERE sku = ?
+        JpaRepository also gives free CRUD methods: save, findAll, findById, delete,
+        deleteById, count, etc.
+
+  * model (package)
+      The data/domain layer.
+      - Product.java: the JPA entity mapped to the "products" table (@Entity,
+        @Table). Each field maps to a column. It also carries the Bean Validation
+        annotations (@NotBlank, @Min, @NotNull, @DecimalMin) and the JPA lifecycle
+        callbacks @PrePersist and @PreUpdate that set the timestamps.
+
+  * exception (package)
+      Error handling.
+      - ResourceNotFoundException  -> maps to HTTP 404
+      - DuplicateResourceException -> maps to HTTP 409
+      - InsufficientStockException -> maps to HTTP 400
+      - GlobalExceptionHandler.java: annotated @RestControllerAdvice. It contains
+        @ExceptionHandler methods that catch the exceptions above (plus validation
+        errors and any other Exception) and convert them into a consistent JSON body.
+
+  * resources/application.properties
+      Configuration: server port, database URL/credentials (from environment
+      variables), and JPA/Hibernate settings.
+
+  * test/java/.../ProductServiceTest.java
+      Five unit tests that verify the service rules using Mockito (a fake repository).
+
+There is NO DTO (Data Transfer Object) package. The same Product entity object is used
+as both the JSON input and the JSON output. That is a simplification (see section 5).
+
+
+--------------------------------------------------------------------------------
+4. HOW EACH API ENDPOINT WORKS, STEP BY STEP
+--------------------------------------------------------------------------------
+
+Base path: /api/products   (defined by @RequestMapping on ProductController)
+
+--- POST /api/products  -> ProductController.create(@Valid @RequestBody Product p)
+    1. Spring converts JSON to Product and validates it.
+    2. service.create(p): if repo.existsBySku(sku) is true -> throw
+       DuplicateResourceException (409). Otherwise set p.setId(null) and
+       repo.save(p) -> INSERT.
+    3. Returns 201 Created with the saved product.
+    Errors: 400 if validation fails, 409 if the SKU already exists.
+
+--- GET /api/products?category=...&search=...  -> ProductController.all(category, search)
+    1. If category is present and not blank -> service.byCategory(category).
+    2. Else if search is present and not blank -> service.search(search).
+    3. Else -> service.getAll().
+    4. Returns 200 OK with a JSON array (possibly empty).
+    Note: category is checked first, so if you send both, category wins.
+
+--- GET /api/products/{id}  -> ProductController.one(@PathVariable Long id)
+    1. service.getById(id) -> repo.findById(id).orElseThrow(...).
+    2. If found: 200 OK with the product.
+    3. If not found: ResourceNotFoundException -> 404.
+
+--- PUT /api/products/{id}  -> ProductController.update(@PathVariable id, @Valid @RequestBody Product p)
+    1. Validate the body.
+    2. service.update(id, p): load the existing product (404 if missing). If the SKU
+       changed and the new SKU already belongs to another product -> 409. Otherwise
+       copy name, sku, quantity, price, category onto the existing entity and save().
+       Hibernate issues an UPDATE (because the entity already has an id).
+    3. Returns 200 OK with the updated product.
+
+--- PATCH /api/products/{id}/stock?change=N  -> ProductController.stock(id, @RequestParam int change)
+    1. "change" is a required int query parameter (e.g. +5 to add, -3 to remove).
+    2. service.adjustStock(id, change): load the product (404 if missing), compute
+       newQty = current + change. If newQty < 0 -> InsufficientStockException (400).
+       Otherwise set the new quantity and save().
+    3. Returns 200 OK with the updated product.
+
+--- GET /api/products/low-stock?threshold=10  -> ProductController.lowStock(threshold)
+    1. "threshold" defaults to 10 if not provided.
+    2. service.lowStock(threshold) -> repo.findByQuantityLessThan(threshold).
+    3. Returns 200 OK with the array of products whose quantity is below the threshold.
+
+--- DELETE /api/products/{id}  -> ProductController.delete(id)
+    1. service.delete(id): getById(id) (404 if missing) then repo.delete(...).
+    2. Returns 204 No Content with an empty body.
+
+Routing detail worth mentioning: "/low-stock" is a literal path and "/{id}" is a
+variable path. Spring MVC prefers the more specific literal match, so a GET to
+/api/products/low-stock is routed to lowStock(), not to one(id) with id="low-stock".
+
+
+--------------------------------------------------------------------------------
+5. HOW THE CONTROLLER, SERVICE, REPOSITORY, AND MODEL LAYERS INTERACT
+   (AND WHY THERE IS NO DTO LAYER)
+--------------------------------------------------------------------------------
+
+The layers are stacked so each one only talks to the one below it:
+
+  Controller  ->  Service  ->  Repository  ->  Database
+
+  * Controller (ProductController) knows only about HTTP and the Service. It never
+    touches the repository or the database directly.
+  * Service (ProductService) knows the business rules and the Repository. It never
+    knows about HTTP (no request/response objects).
+  * Repository (ProductRepository) knows only about the database/entity.
+  * Model (Product) is the shared data structure that flows between all layers and is
+    what actually gets mapped to a table row.
+
+Why this separation matters: business rules live in one place (the service), so they
+can be tested without a web server or a database (that is exactly what
+ProductServiceTest does). HTTP concerns stay in the controller, so you could add a
+different interface (e.g. a CLI) without rewriting the rules.
+
+DTOs: A "DTO" (Data Transfer Object) is a separate class used only for API input or
+output, so the internal entity is not exposed. THIS PROJECT DOES NOT USE DTOs. The
+Product entity is used directly as the request body and response body. Consequences:
+  * The API JSON contains and accepts persistence fields like id, createdAt, updatedAt.
+  * The service compensates by forcing id = null on create, and the timestamps are
+    controlled by JPA callbacks (@PrePersist/@PreUpdate), so a client cannot fake them
+    for new rows. On updates, createdAt is @Column(updatable = false).
+If asked "why not DTOs?", a good answer is: "For a small single-entity API the entity
+doubles as the transfer object to reduce boilerplate, but a production system would
+introduce request/response DTOs to decouple the API contract from the database schema
+and to hide server-managed fields."
+
+
+--------------------------------------------------------------------------------
+6. HOW DATABASE OPERATIONS WORK
+--------------------------------------------------------------------------------
+
+Technology: Spring Data JPA on top of Hibernate on top of MySQL.
+
+  * Entity mapping: Product (@Entity, @Table(name="products")) maps to the products
+    table. @Id + @GeneratedValue(strategy = IDENTITY) makes the id an auto-increment
+    primary key. Each field maps to a column; camelCase fields are converted to
+    snake_case columns by Hibernate's default naming strategy (createdAt -> created_at).
+
+  * The repository: ProductRepository extends JpaRepository<Product, Long>. Spring
+    Data JPA generates the implementation at startup. You never write SQL for the
+    standard operations or for the derived query methods.
+
+  * Saving: repo.save(product) does an INSERT when the entity's id is null and an
+    UPDATE when the id is present. This is why ProductService.create() sets id to null
+    first — to guarantee an insert.
+
+  * Auto schema creation:
+      - The JDBC URL includes createDatabaseIfNotExist=true, so MySQL creates the
+        inventory_db schema if it is missing.
+      - spring.jpa.hibernate.ddl-auto=update tells Hibernate to create/alter the
+        products table to match the entity on startup.
+    This is convenient in development. In production you would use versioned
+    migrations (Flyway/Liquibase) instead — which this project does NOT include.
+
+  * Lifecycle callbacks:
+      - @PrePersist onCreate(): sets createdAt and updatedAt just before the first
+        INSERT.
+      - @PreUpdate onUpdate(): refreshes updatedAt just before each UPDATE.
+
+  * Transactions: ProductService is annotated @Transactional, so each public method
+    runs inside a database transaction; if it throws, the transaction rolls back.
+    Read-only methods use @Transactional(readOnly = true) to signal that they do not
+    modify data.
+
+  * Relationships: there is only ONE table (products). There are NO foreign keys,
+    no @OneToMany/@ManyToOne, and no join tables in the current model.
+
+  * Connection pooling: Spring Boot uses HikariCP by default to reuse database
+    connections efficiently.
+
+
+--------------------------------------------------------------------------------
+7. HOW VALIDATION AND EXCEPTION HANDLING WORK
+--------------------------------------------------------------------------------
+
+VALIDATION (where the rules live): on the Product entity fields.
+  - @NotBlank on name  -> "Name is required"
+  - @NotBlank on sku   -> "SKU is required"
+  - @Min(0) on quantity -> "Quantity cannot be negative"
+  - @NotNull + @DecimalMin("0.0") on price -> "Price is required" / "Price cannot be negative"
+  - category: no validation (optional free text).
+
+How it triggers: the controller parameters are annotated @Valid, so Spring runs these
+Bean Validation rules when the JSON is converted into a Product. If any fail, Spring
+throws MethodArgumentNotValidException BEFORE the service is called.
+
+Format-specific note: "quantity" is a primitive int, so if the client omits it, it
+becomes 0, which passes @Min(0). A missing "price" (a BigDecimal object) becomes null
+and fails @NotNull. "sku" has @Column(unique = true, nullable = false), so the
+database also enforces uniqueness as a second line of defence.
+
+EXCEPTION HANDLING: GlobalExceptionHandler is a @RestControllerAdvice — a class whose
+job is to catch exceptions thrown anywhere in the controllers/services and turn them
+into HTTP responses. It has one @ExceptionHandler method per exception type:
+
+  ResourceNotFoundException    -> 404 Not Found
+  DuplicateResourceException   -> 409 Conflict
+  InsufficientStockException   -> 400 Bad Request
+  MethodArgumentNotValidException -> 400 Bad Request, with an "errors" map of
+                                     field -> message
+  Exception (catch-all)        -> 500 Internal Server Error ("Something went wrong")
+
+All error bodies share this shape:
+  { "timestamp": "<ISO-8601>", "status": <number>, "error": "<message>" }
+and validation errors additionally include:
+  "errors": { "<field>": "<message>", ... }
+
+Where each exception is thrown (by the service):
+  - create(): repo.existsBySku(sku) true -> DuplicateResourceException.
+  - update(): SKU changed to one owned by another product -> DuplicateResourceException.
+  - getById(): repo.findById(id) empty -> ResourceNotFoundException (also used by
+    update, adjustStock, and delete through getById).
+  - adjustStock(): newQty < 0 -> InsufficientStockException.
+
+Honest limitation: the catch-all Exception handler means some client mistakes that
+Spring normally maps to 400 (malformed JSON, a non-numeric {id}, or a missing required
+"change" parameter) will instead be returned as 500. Adding specific handlers for
+those exceptions would be a good improvement.
+
+
+--------------------------------------------------------------------------------
+8. HOW TO RUN THE PROJECT LOCALLY
+--------------------------------------------------------------------------------
+
+Prerequisites:
+  * JDK 17 or newer (developed/verified on JDK 21).
+  * MySQL 8.x running on localhost:3306 (or change DB_HOST/DB_PORT).
+  * Maven is optional — the project ships a Maven Wrapper (mvnw / mvnw.cmd).
+
+Steps (Windows PowerShell):
+
+  1. Get the code:
+       git clone https://github.com/Madhav-Agg/Inventory-Management-API.git
+       cd Inventory-Management-API
+
+  2. Set the database password (and any overrides) as environment variables:
+       $env:DB_PASSWORD = "your_mysql_password"
+       # optional:
+       # $env:DB_USER     = "root"
+       # $env:DB_HOST     = "localhost"
+       # $env:DB_PORT     = "3306"
+       # $env:DB_NAME     = "inventory_db"
+
+  3. (Optional) Create the database manually — normally automatic:
+       CREATE DATABASE IF NOT EXISTS inventory_db;
+     The JDBC URL already has createDatabaseIfNotExist=true, and Hibernate creates the
+     products table via ddl-auto=update, so this step is usually unnecessary.
+
+  4. Run it:
+       .\mvnw.cmd spring-boot:run
+     or build a jar and run it:
+       .\mvnw.cmd clean package
+       java -jar target\inventory-1.0.0.jar
+
+  5. Confirm it is up: watch for "Tomcat started on port(s): 8080" and
+     "Started InventoryApplication", then call:
+       Invoke-RestMethod http://localhost:8080/api/products     # returns [] first time
+
+  If port 8080 is busy, set a different one:  $env:SERVER_PORT = "8081"
+
+  Tests: .\mvnw.cmd test    (these are unit tests and need NO database).
+
+
+--------------------------------------------------------------------------------
+9. HOW TO TEST THE ENDPOINTS IN POSTMAN
+--------------------------------------------------------------------------------
+
+Fast path:
+  1. Open Postman -> Import -> choose the file postman_collection.json from the repo.
+  2. The collection has a variable "base" = http://localhost:8080/api/products and
+     pre-built requests: Create product, Get all, Get by id, Update, Add stock (+5),
+     Remove stock (-3), Low stock, Filter by category, Search by name, Delete.
+  3. Make sure the app is running, then send the requests in this order:
+     a) Create product (POST) — send the sample body. Expect 201 and an id in the
+        response. Note the id (usually 1 on a fresh database).
+     b) Get by id (GET /1) — expect 200 and the product JSON.
+     c) Add stock (PATCH /1/stock?change=5) — quantity increases by 5.
+     d) Remove stock (PATCH /1/stock?change=-3) — quantity decreases by 3.
+     e) Low stock (GET /low-stock?threshold=10) — returns products under 10.
+     f) Filter by category (GET ?category=Electronics) and Search by name (GET ?search=key).
+     g) Update (PUT /1) — change the name/price; expect 200.
+     h) Delete (DELETE /1) — expect 204 with no body.
+
+  4. Try the ERROR cases on purpose (interviewers like this):
+     - POST the same SKU again -> 409 Conflict.
+     - POST with an empty name or negative price -> 400 with an "errors" map.
+     - GET /99999 -> 404 "Product not found: 99999".
+     - PATCH /1/stock?change=-99999 -> 400 "Not enough stock...".
+
+Manual alternative: create a new request, choose the method and URL, set the header
+Content-Type: application/json, and paste the JSON body for POST/PUT.
+
+Remember to be honest in the interview: you tested the API manually with Postman and
+via cURL, and the service layer has 5 automated unit tests. Do not claim performance
+or load testing that was not done.
+
+
+--------------------------------------------------------------------------------
+10. REPRESENTATIVE CODE PATHS USING ACTUAL CLASS AND METHOD NAMES
+--------------------------------------------------------------------------------
+
+PATH A — Create product with a duplicate SKU (happy validation, business rejection):
+  ProductController.create(p)
+    -> ProductService.create(p)
+       -> ProductRepository.existsBySku("KB-001")   // Spring Data query, returns true
+       -> throw new DuplicateResourceException("SKU already exists: " + sku)
+    -> GlobalExceptionHandler.duplicate(e)
+       -> HTTP 409 with { timestamp, status, error }
+
+PATH B — Create product successfully:
+  ProductController.create(p)
+    -> ProductService.create(p)
+       -> existsBySku(...) == false
+       -> p.setId(null)
+       -> ProductRepository.save(p)        // Hibernate INSERT
+       -> Product.onCreate() (@PrePersist) sets createdAt = updatedAt = now
+    -> ResponseEntity.status(HttpStatus.CREATED).body(saved)   // 201
+
+PATH C — Get a product that does not exist:
+  ProductController.one(99L)
+    -> ProductService.getById(99L)
+       -> ProductRepository.findById(99L)  // Optional.empty()
+       -> orElseThrow(() -> new ResourceNotFoundException("Product not found: 99"))
+    -> GlobalExceptionHandler.notFound(e)  -> 404
+
+PATH D — Remove more stock than available:
+  ProductController.stock(1L, -50)
+    -> ProductService.adjustStock(1L, -50)
+       -> getById(1L) -> product with quantity 10
+       -> newQty = 10 + (-50) = -40
+       -> newQty < 0 -> throw new InsufficientStockException(
+              "Not enough stock. Available: 10, requested change: -50")
+    -> GlobalExceptionHandler.stock(e)     -> 400
+
+PATH E — Update a product, changing its SKU to one that already exists:
+  ProductController.update(id, in)
+    -> ProductService.update(id, in)
+       -> getById(id) -> existing product
+       -> different SKU && existsBySku(newSku) -> DuplicateResourceException -> 409
+       (otherwise it copies the fields and calls repo.save -> UPDATE)
+
+PATH F — List by category:
+  ProductController.all("Electronics", null)
+    -> category not blank -> ProductService.byCategory("Electronics")
+       -> ProductRepository.findByCategoryIgnoreCase("Electronics")
+    -> 200 with the matching array
+
+PATH G — Unit test without a database (ProductServiceTest):
+  @Mock ProductRepository repo;  @InjectMocks ProductService service;
+  Test adjustStock_addsQuantity():
+      when(repo.findById(1L)).thenReturn(Optional.of(sampleProduct));       // quantity 10
+      when(repo.save(any(Product.class))).thenAnswer(i -> i.getArgument(0));
+      assertEquals(15, service.adjustStock(1L, 5).getQuantity());          // 10 + 5
+  Test create_rejectsDuplicateSku():
+      when(repo.existsBySku("KB-001")).thenReturn(true);
+      assertThrows(DuplicateResourceException.class, () -> service.create(sample()));
+      verify(repo, never()).save(any());   // proves save() is never called
+
+
+--------------------------------------------------------------------------------
+11. FIFTEEN-PLUS LIKELY INTERVIEW QUESTIONS WITH ACCURATE ANSWERS
+--------------------------------------------------------------------------------
+
+Q1. What does this project do?
+A.  It is a Spring Boot REST API that manages a product catalogue and stock levels in
+    MySQL. It supports creating, reading, updating, and deleting products, adjusting
+    stock with protection against negative quantities, reporting low stock, and
+    filtering/searching products. There is no UI and no authentication.
+
+Q2. What is the architecture?
+A.  A layered architecture: Controller -> Service -> Repository -> Database. The
+    ProductController handles HTTP, ProductService holds business rules and
+    transactions, ProductRepository (Spring Data JPA) handles persistence, and the
+    Product entity maps to the products table. A GlobalExceptionHandler centralizes
+    error responses.
+
+Q3. Why is there a service layer — couldn't the controller call the repository?
+A.  The service keeps business rules (duplicate SKU checks, negative-stock prevention,
+    timestamp handling) in one place and defines transaction boundaries with
+    @Transactional. It also makes those rules unit-testable without a web server or a
+    database, which is exactly what ProductServiceTest does.
+
+Q4. How do you prevent a product's quantity from going negative?
+A.  Two ways. (@Min(0) on the entity rejects a negative quantity in the request body
+    for create/update.) For stock changes, ProductService.adjustStock computes
+    newQty = current + change and throws InsufficientStockException if newQty < 0,
+    which the handler returns as HTTP 400.
+
+Q5. How is SKU uniqueness enforced?
+A.  In the service, ProductService.create checks repo.existsBySku(sku) and throws
+    DuplicateResourceException (HTTP 409). The entity also declares
+    @Column(unique = true, nullable = false), so the database enforces it as a second
+    line of defence.
+
+Q6. How do you map Java objects to the database?
+A.  With JPA/Hibernate annotations. Product is @Entity and @Table(name = "products");
+    @Id with @GeneratedValue(strategy = IDENTITY) is the auto-increment primary key;
+    fields map to columns; camelCase becomes snake_case (createdAt -> created_at).
+
+Q7. How do the repository query methods work without implementations?
+A.  ProductRepository extends JpaRepository and declares methods like
+    findByCategoryIgnoreCase, findByQuantityLessThan, findByNameContainingIgnoreCase,
+    and existsBySku. Spring Data JPA parses the method names ("query derivation") and
+    generates the SQL implementation at startup. JpaRepository also provides save,
+    findAll, findById, delete, etc.
+
+Q8. How is the database schema created?
+A.  The JDBC URL has createDatabaseIfNotExist=true so MySQL creates the inventory_db
+    schema, and spring.jpa.hibernate.ddl-auto=update makes Hibernate create/update the
+    products table from the entity. There are no migration tools like Flyway or
+    Liquibase — that would be the production-grade alternative.
+
+Q9. How does validation work, and what happens when it fails?
+A.  The entity fields carry Bean Validation annotations (@NotBlank, @NotNull, @Min,
+    @DecimalMin). Controller parameters use @Valid, so Spring validates the incoming
+    JSON. On failure it throws MethodArgumentNotValidException, which
+    GlobalExceptionHandler converts into HTTP 400 with a JSON body that includes an
+    "errors" map of field -> message.
+
+Q10. How are errors returned consistently?
+A.  GlobalExceptionHandler is a @RestControllerAdvice. Each exception type has an
+    @ExceptionHandler: ResourceNotFoundException -> 404, DuplicateResourceException ->
+    409, InsufficientStockException -> 400 (validation -> 400), and a catch-all
+    Exception -> 500. All bodies share {timestamp, status, error}.
+
+Q11. Why is ProductService annotated @Transactional?
+A.  So each method runs in a database transaction and rolls back on exceptions. Read
+    methods are marked @Transactional(readOnly = true) to tell Hibernate there is no
+    write and to allow optimizations.
+
+Q12. How does save() decide between INSERT and UPDATE?
+A.  If the entity's id is null, Hibernate INSERTs; if the id is present, it UPDATEs.
+    That is why ProductService.create() calls p.setId(null) before save() — to force an
+    insert even if a client sent an id.
+
+Q13. How are createdAt and updatedAt managed?
+A.  By JPA lifecycle callbacks in the entity: @PrePersist (onCreate) sets both before
+    the first insert, and @PreUpdate (onUpdate) refreshes updatedAt before each update.
+    createdAt is also @Column(updatable = false) so it never changes.
+
+Q14. What is the difference between PUT and PATCH here?
+A.  PUT /{id} replaces all editable fields (name, sku, quantity, price, category) and
+    returns 200. PATCH /{id}/stock only changes the quantity by a delta ("change"
+    query parameter) and returns 200. Both return 404 if the product does not exist.
+
+Q15. What happens if I send both category and search on GET /api/products?
+A.  ProductController.all checks category first; if category is present it filters by
+    category and ignores search. Only if category is absent does it use search.
+
+Q16. Two requests try to buy the last unit at the same time. What happens?
+A.  Honest answer: there is no explicit optimistic/pessimistic locking in this project.
+    adjustStock is transactional, but it reads, computes, and writes without a @Version
+    field, so concurrent updates could interleave. Adding optimistic locking (@Version)
+    or a conditional UPDATE would be the fix. I would not claim it is concurrency-safe.
+
+Q17. How is the API tested?
+A.  There are 5 JUnit 5 unit tests in ProductServiceTest using Mockito to mock
+    ProductRepository. They cover getById success and not-found, duplicate-SKU
+    rejection, adding stock, and insufficient-stock rejection. There are no
+    integration/controller tests and no database-backed tests yet — those are a
+    planned improvement.
+
+Q18. Is the API secure?
+A.  No. Spring Security is not included; there is no authentication or authorization,
+    so every endpoint is public. There are also no secrets committed — the DB password
+    comes from the DB_PASSWORD environment variable. For production you would add
+    authentication, authorization, HTTPS, rate limiting, and input/output DTOs.
+
+Q19. Why is the entity used instead of DTOs, and what are the trade-offs?
+A.  For a small single-entity API, using Product directly avoids extra classes. The
+    trade-offs are that server-managed fields (id, createdAt, updatedAt) appear in the
+    JSON contract and that the API is coupled to the database schema. A production
+    version would add request/response DTOs and a mapper.
+
+Q20. Which HTTP status codes does the API return and when?
+A.  201 on create; 200 on successful reads/updates/stock changes; 204 on delete;
+    400 for validation failures and insufficient stock; 404 when an id is not found;
+    409 for a duplicate SKU; 500 for unexpected errors (and, currently, for some
+    client errors that fall through to the catch-all handler).
+
+Q21. Where would you add pagination and sorting?
+A.  In the GET /api/products endpoints. Change the repository to accept a Pageable
+    (JpaRepository already supports it) and have the controller accept page/size/sort
+    parameters, returning a Page/PageImpl. Not implemented yet.
+
+Q22. What is @RestControllerAdvice and why use it?
+A.  It is a global interceptor for exceptions thrown by controllers. It centralizes
+    error-to-status mapping so each controller method does not need try/catch and the
+    API returns a consistent error shape. This project uses it in
+    GlobalExceptionHandler.
+
+
+--------------------------------------------------------------------------------
+12. WHAT YOU PERSONALLY NEED TO UNDERSTAND BEFORE PRESENTING THIS PROJECT
+--------------------------------------------------------------------------------
+
+Study and be able to explain, in your own words:
+
+  1. The request lifecycle: Client -> ProductController -> ProductService ->
+     ProductRepository -> Hibernate -> MySQL -> back as JSON. Be able to trace a POST
+     and a GET out loud.
+
+  2. What each class does and why it exists:
+     InventoryApplication, ProductController, ProductService, ProductRepository,
+     Product, GlobalExceptionHandler, and the three custom exceptions.
+
+  3. The exact endpoints and their status codes (201/200/204/400/404/409/500) and the
+     request/response JSON shape for Product.
+
+  4. The business rules and where they live:
+     * duplicate SKU -> DuplicateResourceException -> 409
+     * stock would go below zero -> InsufficientStockException -> 400
+     * missing id -> ResourceNotFoundException -> 404
+     Know that they are implemented in ProductService, not the controller.
+
+  5. How validation works (@Valid + annotations on Product) and how a validation
+     failure becomes a 400 with an "errors" map.
+
+  6. How JPA/Hibernate persistence works here: @Entity/@Table/@Id/@GeneratedValue,
+     how save() chooses INSERT vs UPDATE (id null vs present), and the
+     @PrePersist/@PreUpdate timestamps.
+
+  7. How Spring Data JPA derives queries from method names, and the four custom
+     repository methods.
+
+  8. How to run it: set $env:DB_PASSWORD, run .\mvnw.cmd spring-boot:run, and hit
+     http://localhost:8080/api/products. Know that the DB/table are auto-created.
+
+  9. How to run the tests (.\mvnw.cmd test) and what they cover (5 Mockito unit tests
+     on ProductService) and what they do NOT cover (no DB, no controller tests).
+
+ 10. The honest limitations, so you are never caught out:
+     * no authentication/authorization
+     * no pagination/sorting
+     * no DTOs (entity used directly)
+     * no Swagger/OpenAPI
+     * no migrations (ddl-auto=update instead)
+     * the catch-all handler returns 500 for some client errors that should be 400
+     * no concurrency control on stock updates
+     * only service-layer unit tests exist
+
+ 11. Vocabulary you should be able to define: REST, HTTP verb, status code,
+     dependency injection, constructor injection, bean, @RestController, @Service,
+     @Repository, @Entity, ORM, JPA, Hibernate, Spring Data JPA, derived query,
+     transaction, Bean Validation, @RestControllerAdvice, DTO, SKU.
+
+ 12. A 60-second "pitch" you can rehearse:
+     "It's a Spring Boot REST API for inventory management backed by MySQL. It's built
+      in layers — a ProductController for HTTP, a ProductService for business rules
+      like duplicate-SKU detection and preventing negative stock, and a
+      ProductRepository on Spring Data JPA. The Product entity maps to a products
+      table, and a GlobalExceptionHandler returns consistent JSON errors with proper
+      status codes. There's a Maven build with five Mockito unit tests for the service
+      layer. It's intentionally scoped without auth, DTOs, or pagination, which I'd add
+      next."
+
+Final reminder: present only what is truly in the code. Where this project does not
+implement something (security, DTOs, migrations, pagination, integration tests), say so
+clearly — describing limitations accurately is a strength in an interview.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

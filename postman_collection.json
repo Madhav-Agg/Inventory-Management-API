@@ -1,0 +1,23 @@
+{
+  "info": {
+    "name": "Inventory Management API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [{ "key": "base", "value": "http://localhost:8080/api/products" }],
+  "item": [
+    { "name": "Create product", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+      "body": { "mode": "raw", "raw": "{\n  \"name\": \"Keyboard\",\n  \"sku\": \"KB-001\",\n  \"quantity\": 25,\n  \"price\": 799.00,\n  \"category\": \"Electronics\"\n}" },
+      "url": "{{base}}" } },
+    { "name": "Get all", "request": { "method": "GET", "url": "{{base}}" } },
+    { "name": "Get by id", "request": { "method": "GET", "url": "{{base}}/1" } },
+    { "name": "Update", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }],
+      "body": { "mode": "raw", "raw": "{\n  \"name\": \"Mechanical Keyboard\",\n  \"sku\": \"KB-001\",\n  \"quantity\": 30,\n  \"price\": 999.00,\n  \"category\": \"Electronics\"\n}" },
+      "url": "{{base}}/1" } },
+    { "name": "Add stock (+5)", "request": { "method": "PATCH", "url": "{{base}}/1/stock?change=5" } },
+    { "name": "Remove stock (-3)", "request": { "method": "PATCH", "url": "{{base}}/1/stock?change=-3" } },
+    { "name": "Low stock", "request": { "method": "GET", "url": "{{base}}/low-stock?threshold=10" } },
+    { "name": "Filter by category", "request": { "method": "GET", "url": "{{base}}?category=Electronics" } },
+    { "name": "Search by name", "request": { "method": "GET", "url": "{{base}}?search=key" } },
+    { "name": "Delete", "request": { "method": "DELETE", "url": "{{base}}/1" } }
+  ]
+}

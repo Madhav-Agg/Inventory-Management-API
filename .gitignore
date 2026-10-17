@@ -1,0 +1,29 @@
+# ---- Build output ----
+target/
+
+# ---- Maven wrapper ----
+!.mvn/wrapper/maven-wrapper.jar
+
+# ---- IDE / editor ----
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# ---- VS Code "Java modernization" extension artifacts (not part of the app) ----
+.github/modernize/
+
+# ---- OS files ----
+.DS_Store
+Thumbs.db
+
+# ---- Logs ----
+*.log
+
+# ---- Local environment / secrets ----
+.env
+.env.local
+application-local.properties
+application-local.yml

@@ -1,0 +1,16 @@
+# Normalize line endings across platforms.
+# The repository stores text files with LF; the working tree may use the OS default.
+* text=auto
+
+*.java       text
+*.xml        text
+*.properties text
+*.md         text
+*.txt        text
+*.json       text
+
+# Maven Wrapper scripts must keep platform-correct line endings.
+mvnw         text eol=lf
+mvnw.cmd     text eol=crlf
+*.sh         text eol=lf
+*.ps1        text eol=crlf
